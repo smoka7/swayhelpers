@@ -37,15 +37,14 @@ func (c *Client) Focus(dir string) {
 			break
 		}
 	}
+	toggleFullscreen := func() {
+		_, err := c.Conn.RunCommand(c.ctx, "fullscreen toggle")
+		if err != nil {
+			log.Fatalln(err)
+		}
+	}
 
 	if FullscreenMode != 0 {
-		toggleFullscreen := func() {
-			_, err := c.Conn.RunCommand(c.ctx, "fullscreen toggle")
-			if err != nil {
-				log.Fatalln(err)
-			}
-		}
-
 		toggleFullscreen()
 		defer toggleFullscreen()
 	}
