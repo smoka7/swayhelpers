@@ -1,7 +1,6 @@
 package src
 
 import (
-	"fmt"
 	"log"
 
 	"github.com/joshuarubin/go-sway"
@@ -24,68 +23,87 @@ func (c *Client) getFocusedWs() *sway.Node {
 	})
 }
 
-func (c *Client) Focus(dir string) {
-	focusedIndex, FullscreenMode := -1, -1
-
-	focusedws := c.getFocusedWs()
-	windowNodes := getAllNodesIn(focusedws)
-	//delete the loop and replace with find focused
-	for i, v := range windowNodes {
-		if v.Focused {
-			focusedIndex = i
-			FullscreenMode = *v.FullscreenMode
-			break
-		}
-	}
-	toggleFullscreen := func() {
-		_, err := c.Conn.RunCommand(c.ctx, "fullscreen toggle")
-		if err != nil {
-			log.Fatalln(err)
-		}
-	}
-
-	if FullscreenMode != 0 {
-		toggleFullscreen()
-		defer toggleFullscreen()
-	}
-	
-	if dir == "prev" {
-		_, err := c.Conn.RunCommand(c.ctx, fmt.Sprintf("[con_id=%d] focus", windowNodes[last(focusedIndex, len(windowNodes))].ID))
-		if err != nil {
-			log.Fatalln(err)
-		}
-		return
-	}
-
-	_, err := c.Conn.RunCommand(c.ctx, fmt.Sprintf("[con_id=%d] focus", windowNodes[next(focusedIndex, len(windowNodes))].ID))
+func toggleFullscreen(c *Client) {
+	_, err := c.Conn.RunCommand(c.ctx, "fullscreen toggle")
 	if err != nil {
 		log.Fatalln(err)
 	}
 }
 
-func last(index int, len int) int {
-	if index == 0 {
-		return len - 1
-	}
-	return index - 1
-}
+func (c *Client) Focus(dir string) {
+	focusedws := c.getFocusedWs()
 
-func next(index int, len int) int {
-	if index == len-1 {
-		return 0
-	}
-	return index + 1
-}
+	noFloating := len(focusedws.FloatingNodes) == 0
+	noTiling := len(focusedws.Nodes) == 0
 
-func getDist(n , m sway.Node) (x, y int64) {
-	getCenter:=func (n sway.Node) (x,y int64) {
-	x = (n.Rect.X + n.Rect.Width)/2
-	y = (n.Rect.Y + n.Rect.Height)/2
+	// on a empty workspace switch workspace
+	if noFloating && noTiling {
+		switchWorkspace(dir, c)
 		return
 	}
-	cenNx,cenNy:=getCenter(n)
-	cenMx,cenMy:=getCenter(m)
-	x = cenNx - cenMx
-	y = cenNy - cenMy
+
+	// get all the nodes in the workspace
+	tilingNodes := getChildNodes(focusedws.Nodes)
+	floatingNodes := getChildNodes(focusedws.FloatingNodes)
+
+    fullScreened := false
+	focusedIndex := -1
+    lastIndex := len(floatingNodes) - 1
+	findIndex := func() {
+		for i, node := range tilingNodes {
+			if node.Focused {
+				focusedIndex = i
+				lastIndex = len(tilingNodes) - 1
+				fullScreened = *node.FullscreenMode != 0
+				return
+			}
+		}
+		for i, node := range floatingNodes {
+			if node.Focused {
+				fullScreened = *node.FullscreenMode != 0
+				focusedIndex = i
+			}
+		}
+	}
+
+	findIndex()
+
+	if fullScreened {
+		toggleFullscreen(c)
+		defer toggleFullscreen(c)
+	}
+
+	// when there is only one type of node dont modify
+	if noFloating || noTiling {
+		c.Conn.RunCommand(c.ctx, "focus "+dir)
+		return
+	}
+
+	// when focused window is on last or first  toggle the mode
+	if (focusedIndex == 0 && dir == "left") ||
+		(focusedIndex == lastIndex && dir == "right") {
+		c.Conn.RunCommand(c.ctx, "focus mode_toggle")
+		return
+	}
+
+	// when node is tiled and its not last or first
+	c.Conn.RunCommand(c.ctx, "focus "+dir)
+}
+
+
+func switchWorkspace(dir string, c *Client) {
+	prev := dir == "left" || dir == "bottom"
+	if prev {
+		c.Conn.RunCommand(c.ctx, "workspace prev")
+		return
+	}
+	c.Conn.RunCommand(c.ctx, "workspace next")
+	return
+}
+
+func getChildNodes(given []*sway.Node) (nodes []*sway.Node) {
+	for _, node := range given {
+		nodes = append(nodes, getAllNodesIn(node)...)
+	}
 	return
 }
