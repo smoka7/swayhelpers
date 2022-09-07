@@ -6,14 +6,89 @@ import (
 	"github.com/joshuarubin/go-sway"
 )
 
-func (c *Client) getFocusedWs() *sway.Node {
+type Focus struct {
+	hasFloating, hasTiling bool
+	fullScreened           bool
+	c                      Client
+	tilingNodes            []*sway.Node
+	floatingNodes          []*sway.Node
+	focusedIndex           int
+	lastIndex              int
+	dir                    string
+}
+
+func newFocus(c Client, dir string) Focus {
+	focusedws := c.getFocusedWs()
+	hasFloating := len(focusedws.FloatingNodes) > 0
+	hasTiling := len(focusedws.Nodes) > 0
+
+	// get all the nodes in the workspace
+	tilingNodes := getChildNodes(focusedws.Nodes)
+	floatingNodes := getChildNodes(focusedws.FloatingNodes)
+
+	return Focus{
+		hasTiling:     hasTiling,
+		hasFloating:   hasFloating,
+		floatingNodes: floatingNodes,
+		tilingNodes:   tilingNodes,
+		c:             c,
+		dir:           dir,
+	}
+}
+
+// when there is only one type of node dont modify
+func (f Focus) onlyTilingOrFloating() bool {
+	if f.hasFloating && f.hasTiling {
+		return false
+	}
+
+	_, err := f.c.Conn.RunCommand(f.c.ctx, "focus "+f.dir)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return true
+}
+
+// when focused window is on last or first toggle the mode
+func (f Focus) onTheEdge() bool {
+	if (f.focusedIndex == 0 && f.dir == "left") ||
+		(f.focusedIndex == f.lastIndex && f.dir == "right") {
+		_, err := f.c.Conn.RunCommand(f.c.ctx, "focus mode_toggle")
+		if err != nil {
+			log.Fatalln(err)
+		}
+		return true
+	}
+
+	return false
+}
+
+// on a empty workspace switch workspace
+func (f Focus) switchWS() bool {
+	if f.hasFloating || f.hasTiling {
+		return false
+	}
+
+	dir := "next"
+	if f.dir == "left" || f.dir == "bottom" {
+		dir = "prev"
+	}
+
+	_, err := f.c.Conn.RunCommand(f.c.ctx, "workspace "+dir)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	return true
+}
+
+func (c Client) getFocusedWs() *sway.Node {
 	focusedwsname := ""
 	tree, _ := c.Conn.GetTree(c.ctx)
-	w, _ := c.Conn.GetWorkspaces(c.ctx)
+	worksapces, _ := c.Conn.GetWorkspaces(c.ctx)
 
-	for _, v := range w {
-		if v.Focused {
-			focusedwsname = v.Name
+	for _, workspace := range worksapces {
+		if workspace.Focused {
+			focusedwsname = workspace.Name
 			break
 		}
 	}
@@ -23,82 +98,66 @@ func (c *Client) getFocusedWs() *sway.Node {
 	})
 }
 
-func toggleFullscreen(c *Client) {
+func toggleFullscreen(c Client) {
 	_, err := c.Conn.RunCommand(c.ctx, "fullscreen toggle")
 	if err != nil {
 		log.Fatalln(err)
 	}
 }
 
-func (c *Client) Focus(dir string) {
-	focusedws := c.getFocusedWs()
+func (f Focus) findIndex() Focus {
+	for i, node := range f.tilingNodes {
+		if !node.Focused {
+			continue
+		}
+		f.focusedIndex = i
+		f.lastIndex = len(f.tilingNodes) - 1
+		f.fullScreened = *node.FullscreenMode != 0
+		return f
+	}
 
-	noFloating := len(focusedws.FloatingNodes) == 0
-	noTiling := len(focusedws.Nodes) == 0
+	for i, node := range f.floatingNodes {
+		if !node.Focused {
+			continue
+		}
+		f.focusedIndex = i
+		f.lastIndex = len(f.floatingNodes) - 1
+		f.fullScreened = *node.FullscreenMode != 0
+		return f
+	}
+	return f
+}
 
-	// on a empty workspace switch workspace
-	if noFloating && noTiling {
-		switchWorkspace(dir, c)
+func (c Client) Focus(dir string) {
+	// finds out if focused workspace is empty or not
+	f := newFocus(c, dir)
+
+	happend := f.switchWS()
+	if happend {
 		return
 	}
 
-	// get all the nodes in the workspace
-	tilingNodes := getChildNodes(focusedws.Nodes)
-	floatingNodes := getChildNodes(focusedws.FloatingNodes)
+	f = f.findIndex()
 
-    fullScreened := false
-	focusedIndex := -1
-    lastIndex := len(floatingNodes) - 1
-	findIndex := func() {
-		for i, node := range tilingNodes {
-			if node.Focused {
-				focusedIndex = i
-				lastIndex = len(tilingNodes) - 1
-				fullScreened = *node.FullscreenMode != 0
-				return
-			}
-		}
-		for i, node := range floatingNodes {
-			if node.Focused {
-				fullScreened = *node.FullscreenMode != 0
-				focusedIndex = i
-			}
-		}
-	}
-
-	findIndex()
-
-	if fullScreened {
+	if f.fullScreened {
 		toggleFullscreen(c)
 		defer toggleFullscreen(c)
 	}
 
-	// when there is only one type of node dont modify
-	if noFloating || noTiling {
-		c.Conn.RunCommand(c.ctx, "focus "+dir)
+	happend = f.onlyTilingOrFloating()
+	if happend {
 		return
 	}
 
-	// when focused window is on last or first  toggle the mode
-	if (focusedIndex == 0 && dir == "left") ||
-		(focusedIndex == lastIndex && dir == "right") {
-		c.Conn.RunCommand(c.ctx, "focus mode_toggle")
+	happend = f.onTheEdge()
+	if happend {
 		return
 	}
-
 	// when node is tiled and its not last or first
-	c.Conn.RunCommand(c.ctx, "focus "+dir)
-}
-
-
-func switchWorkspace(dir string, c *Client) {
-	prev := dir == "left" || dir == "bottom"
-	if prev {
-		c.Conn.RunCommand(c.ctx, "workspace prev")
-		return
+	_, err := c.Conn.RunCommand(c.ctx, "focus "+dir)
+	if err != nil {
+		log.Fatalln(err)
 	}
-	c.Conn.RunCommand(c.ctx, "workspace next")
-	return
 }
 
 func getChildNodes(given []*sway.Node) (nodes []*sway.Node) {
