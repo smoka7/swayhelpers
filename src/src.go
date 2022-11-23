@@ -2,6 +2,8 @@ package src
 
 import (
 	"context"
+	"log"
+	"os"
 
 	"github.com/joshuarubin/go-sway"
 )
@@ -14,35 +16,11 @@ type Client struct {
 func NewClient() Client {
 	ctx := context.Background()
 	conn, _ := sway.New(ctx)
-	return Client{
-		Conn: conn,
-		ctx:  ctx,
-	}
-}
-
-func findFirstNode(n *sway.Node, predicate func(*sway.Node) bool) *sway.Node {
-	queue := []*sway.Node{n}
-	for len(queue) > 0 {
-		n = queue[0]
-		queue = queue[1:]
-
-		if n == nil {
-			continue
-		}
-
-		if predicate(n) {
-			return n
-		}
-
-		queue = append(queue, n.Nodes...)
-		queue = append(queue, n.FloatingNodes...)
-	}
-	return nil
+	return Client{conn, ctx}
 }
 
 // returns all the node in parent
 func getAllNodesIn(parent *sway.Node) (nodes []*sway.Node) {
-
 	if parent.PID != nil {
 		nodes = append(nodes, parent)
 	}
@@ -55,4 +33,22 @@ func getAllNodesIn(parent *sway.Node) (nodes []*sway.Node) {
 		nodes = append(nodes, getAllNodesIn(node)...)
 	}
 	return nodes
+}
+
+func (c Client) toggleFullscreen() {
+	c.sendCommand("fullscreen toggle")
+}
+
+// sendCommand  runs the command end exits when it fails
+func (c Client) sendCommand(cmd string) {
+	_, err := c.Conn.RunCommand(c.ctx, cmd)
+	if err != nil {
+		log.Fatalln(err)
+	}
+}
+
+// sendCommandAndExit runs the command end exits when successful
+func (c Client) sendCommandAndExit(cmd string) {
+	c.sendCommand(cmd)
+	os.Exit(0)
 }

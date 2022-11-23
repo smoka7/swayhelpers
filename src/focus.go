@@ -1,15 +1,13 @@
 package src
 
 import (
-	"log"
-
 	"github.com/joshuarubin/go-sway"
 )
 
 type Focus struct {
 	hasFloating, hasTiling bool
 	fullScreened           bool
-	c                      Client
+	onFloating             bool
 	tilingNodes            []*sway.Node
 	floatingNodes          []*sway.Node
 	focusedIndex           int
@@ -17,7 +15,7 @@ type Focus struct {
 	dir                    string
 }
 
-func newFocus(c Client, dir string) Focus {
+func (c Client) newFocus(dir string) Focus {
 	focusedws := c.getFocusedWs()
 	hasFloating := len(focusedws.FloatingNodes) > 0
 	hasTiling := len(focusedws.Nodes) > 0
@@ -31,54 +29,44 @@ func newFocus(c Client, dir string) Focus {
 		hasFloating:   hasFloating,
 		floatingNodes: floatingNodes,
 		tilingNodes:   tilingNodes,
-		c:             c,
 		dir:           dir,
 	}
 }
 
-// when there is only one type of node dont modify
-func (f Focus) onlyTilingOrFloating() bool {
+// when there is only one type of node send the originall command
+func (c Client) onlyTilingOrFloating(f Focus) {
 	if f.hasFloating && f.hasTiling {
-		return false
+		return
 	}
-
-	_, err := f.c.Conn.RunCommand(f.c.ctx, "focus "+f.dir)
-	if err != nil {
-		log.Fatal(err)
-	}
-	return true
+	c.sendCommandAndExit("focus " + f.dir)
 }
 
 // when focused window is on last or first toggle the mode
-func (f Focus) onTheEdge() bool {
-	if (f.focusedIndex == 0 && f.dir == "left") ||
-		(f.focusedIndex == f.lastIndex && f.dir == "right") {
-		_, err := f.c.Conn.RunCommand(f.c.ctx, "focus mode_toggle")
-		if err != nil {
-			log.Fatalln(err)
-		}
-		return true
+func (c Client) onTheEdge(f Focus) {
+	// if (f.focusedIndex == 0 && f.dir == "left") ||
+	// 	(f.focusedIndex == f.lastIndex && f.dir == "right") {
+	// 	c.sendCommandAndExit("focus mode_toggle")
+	// }
+	singleFloating := f.onFloating && len(f.floatingNodes) == 1
+	singleTiling := !f.onFloating && len(f.tilingNodes) == 1
+	firstTiling := !f.onFloating && f.focusedIndex == 0 && f.dir != "right"
+	lastTiling := !f.onFloating && f.focusedIndex == f.lastIndex && f.dir != "left"
+	if singleFloating || singleTiling || firstTiling || lastTiling {
+		c.sendCommandAndExit("focus mode_toggle")
 	}
-
-	return false
 }
 
-// on a empty workspace switch workspace
-func (f Focus) switchWS() bool {
+// on a empty workspace switches to next or prev workspace based on the direction
+func (c Client) switchWS(f Focus) {
 	if f.hasFloating || f.hasTiling {
-		return false
+		return
 	}
 
 	dir := "next"
 	if f.dir == "left" || f.dir == "bottom" {
 		dir = "prev"
 	}
-
-	_, err := f.c.Conn.RunCommand(f.c.ctx, "workspace "+dir)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	return true
+	c.sendCommandAndExit("workspace " + dir)
 }
 
 func (c Client) getFocusedWs() *sway.Node {
@@ -93,71 +81,54 @@ func (c Client) getFocusedWs() *sway.Node {
 		}
 	}
 
-	return findFirstNode(tree, func(n *sway.Node) bool {
-		return n.Type == "workspace" && n.Name == focusedwsname
+	return tree.TraverseNodes(func(n *sway.Node) bool {
+		return n.Type == sway.NodeWorkspace && n.Name == focusedwsname
 	})
 }
 
-func toggleFullscreen(c Client) {
-	_, err := c.Conn.RunCommand(c.ctx, "fullscreen toggle")
-	if err != nil {
-		log.Fatalln(err)
-	}
-}
-
-func (f Focus) findIndex() Focus {
+// findIndex sets the focused node index
+func (f *Focus) findIndex() {
+	f.lastIndex = len(f.tilingNodes) - 1
 	for i, node := range f.tilingNodes {
 		if !node.Focused {
 			continue
 		}
 		f.focusedIndex = i
-		f.lastIndex = len(f.tilingNodes) - 1
-		f.fullScreened = *node.FullscreenMode != 0
-		return f
+		f.fullScreened = node.FullscreenMode != sway.FullscreenNone
+		return
 	}
 
+	f.lastIndex = len(f.floatingNodes) - 1
 	for i, node := range f.floatingNodes {
 		if !node.Focused {
 			continue
 		}
+		f.onFloating = true
 		f.focusedIndex = i
-		f.lastIndex = len(f.floatingNodes) - 1
-		f.fullScreened = *node.FullscreenMode != 0
-		return f
+		f.fullScreened = node.FullscreenMode != sway.FullscreenNone
+		return
 	}
-	return f
 }
 
 func (c Client) Focus(dir string) {
 	// finds out if focused workspace is empty or not
-	f := newFocus(c, dir)
+	f := c.newFocus(dir)
 
-	happend := f.switchWS()
-	if happend {
-		return
-	}
+	c.switchWS(f)
 
-	f = f.findIndex()
+	f.findIndex()
 
 	if f.fullScreened {
-		toggleFullscreen(c)
-		defer toggleFullscreen(c)
+		c.toggleFullscreen()
+		defer c.toggleFullscreen()
 	}
 
-	happend = f.onlyTilingOrFloating()
-	if happend {
-		return
-	}
+	c.onlyTilingOrFloating(f)
 
-	happend = f.onTheEdge()
-	if happend {
-		return
-	}
+	c.onTheEdge(f)
+
 	// when node is tiled and its not last or first
-	_, err := c.Conn.RunCommand(c.ctx, "focus "+dir)
-	if err != nil {
-		log.Fatalln(err)
-	}
+	c.sendCommandAndExit("focus " + dir)
 }
 
 func getChildNodes(given []*sway.Node) (nodes []*sway.Node) {

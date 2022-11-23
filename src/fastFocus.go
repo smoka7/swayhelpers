@@ -2,7 +2,6 @@ package src
 
 import (
 	"bufio"
-	"context"
 	"fmt"
 	"log"
 	"os"
@@ -71,8 +70,7 @@ func (c Client) readInput() {
 // getContainters gets the focused workspace containers
 func (c Client) getContainters() {
 	focusedWS := c.getFocusedWs()
-	containers = getChildNodes(focusedWS.Nodes)
-	containers = append(containers, getChildNodes(focusedWS.FloatingNodes)...)
+	containers = getAllNodesIn(focusedWS)
 }
 
 // TODO maybe show Gui
@@ -92,11 +90,5 @@ func (c Client) goToContainer(r rune) {
 	}
 
 	command := fmt.Sprintf("[con_id=%d] focus", containers[index].ID)
-	_, err := c.Conn.RunCommand(context.Background(), command)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-
-	os.Exit(0)
+	c.sendCommandAndExit(command)
 }

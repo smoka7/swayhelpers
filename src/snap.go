@@ -1,6 +1,10 @@
 package src
 
-import "log"
+import (
+	"fmt"
+
+	"github.com/joshuarubin/go-sway"
+)
 
 // sizes of container for snap
 var sizes = map[string]string{
@@ -18,21 +22,14 @@ var positions = map[string]string{
 	"bottom": "0ppt 50ppt",
 }
 
-func (c *Client) Snap(dir string) {
+func (c Client) Snap(dir string) {
 	tree, _ := c.Conn.GetTree(c.ctx)
 	focused := tree.FocusedNode()
-	if focused.Type != "floating_con" {
-		_, err := c.Conn.RunCommand(c.ctx, "floating toggle")
-		if err != nil {
-			log.Fatalln(err)
-		}
+
+	if focused.FullscreenMode != sway.FullscreenNone {
+		c.toggleFullscreen()
 	}
-	_, err := c.Conn.RunCommand(c.ctx, "resize set "+sizes[dir])
-	if err != nil {
-		log.Fatalln(err)
-	}
-	_, err = c.Conn.RunCommand(c.ctx, "move position "+positions[dir])
-	if err != nil {
-		log.Fatalln(err)
-	}
+
+	cmd := fmt.Sprintf("floating enable, resize set %s , move position %s", sizes[dir], positions[dir])
+	c.sendCommand(cmd)
 }
